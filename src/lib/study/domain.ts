@@ -236,6 +236,25 @@ export function chunkText(text: string, size = 900, overlap = 150) {
 
 export type RetrievedChunk = { source: string; text: string; noteId?: string; position?: number };
 
+const NON_FACT_TUTOR_REPLIES = [
+  /(?:don['’]?t|do not)\s+see relevant notes/i,
+  /can(?:not|'t|’t)\s+(?:verify|confirm) (?:that answer|this answer).*notes/i,
+  /couldn['’]?t produce a clear/i,
+  /у нотатках[^.]{0,100}немає матеріалу/i,
+  /не можу підтвердити[^.]{0,100}нотат/i,
+  /не вдалося підготувати зрозумілу/i,
+  /в заметках[^.]{0,100}нет материала/i,
+  /не могу подтвердить[^.]{0,100}замет/i,
+  /не удалось подготовить понятный/i,
+  /当前科目的笔记中没有足够的相关内容/,
+  /我无法从你的笔记中确认/,
+  /我无法用中文生成清晰的回答/,
+];
+
+export function isTutorReplySaveable(content: string) {
+  return !NON_FACT_TUTOR_REPLIES.some((pattern) => pattern.test(content));
+}
+
 export function retrieveRelevantChunks(
   query: string,
   notes: { source: string; text: string; noteId?: string; position?: number }[],
@@ -324,7 +343,13 @@ export function eachDay(start: string, end: string) {
 }
 
 export function isDay(value: string) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const [, year, month, day] = match;
+  const date = new Date(Number(year), Number(month) - 1, Number(day));
+  return date.getFullYear() === Number(year)
+    && date.getMonth() === Number(month) - 1
+    && date.getDate() === Number(day);
 }
 
 export function draftPlan(input: {

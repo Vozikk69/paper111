@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { Send, Trash2, Download } from "lucide-react";
 import { toast } from "sonner";
 import { Button, Panel, fieldClass, selectClass } from "@/components/ui";
+import { isTutorReplySaveable } from "@/lib/study/domain";
 import {
   cardFromReply,
   clearChat,
@@ -232,7 +233,7 @@ export function TutorView() {
                     <p className="text-sm whitespace-pre-wrap">{message.content}</p>
                   )}
                 </div>
-                {message.role === "assistant" && (
+                {message.role === "assistant" && isTutorReplySaveable(message.content) && (
                   <button
                     type="button"
                     className="mt-1 min-h-11 text-xs text-brass disabled:opacity-50"

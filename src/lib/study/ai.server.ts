@@ -1,4 +1,4 @@
-import { draftPlan } from "@/lib/study/domain";
+import { draftPlan } from "./domain.ts";
 
 /** Offline-only fallback tutor. The interactive tutor itself runs in the browser model. */
 export async function tutorReply(input: {
@@ -44,10 +44,18 @@ function extractSentences(material: string): string[] {
     .replace(/\r/g, "")
     .replace(/\t/g, " ")
     .replace(/[ \u00a0]+/g, " ")
-    .replace(/\n{2,}/g, "\n");
+    .replace(/^\s*(?:chapter|section)\s+\d+[^\n]*$/gim, " ")
+    .replace(/^\s*\d{1,3}\s*$/gm, " ")
+    .replace(/^\s*(?:\d+(?:\.\d+)*\s+)?(?:introduction|naming of alkanes|rules of systematic nomenclature|examples?)\s*$/gim, " ")
+    // Text PDFs often emit a running chapter title as a standalone ALL-CAPS line.
+    .replace(/^\s*[A-Z][A-Z\s'-]{2,}$/gm, " ")
+    // PDF extraction wraps a sentence onto multiple lines. Join those lines
+    // before sentence detection so cards are not built from fragments.
+    .replace(/\s*\n\s*/g, " ")
+    .replace(/\s+/g, " ");
 
   const raw = text
-    .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“])/)
+    .split(/(?<=[.!?])\s+(?=[A-Z0-9"“])/)
     .map(cleanSentence)
     .filter(isUsableSentence);
 
@@ -66,10 +74,14 @@ function extractSentences(material: string): string[] {
 const STOP_TERMS = new Set(
   [
     "the", "a", "an", "this", "that", "these", "those", "it", "they", "he", "she",
+    "group", "groups", "compound", "compounds", "molecule", "molecules", "formula", "formulas",
+    "atom", "atoms", "c",
+    "structure", "structures", "sum", "sums", "number", "numbers", "explanation", "explanations",
+    "note", "remember", "recall", "notice", "we", "there",
     "war", "wars", "conflict", "conflicts", "battle", "battles", "event", "events",
-    "thing", "things", "fact", "facts", "period", "time", "year", "years",
+    "thing", "things", "fact", "facts", "period", "time", "year", "years", "of",
     "people", "country", "countries", "government", "side", "sides", "result",
-    "one", "two", "three", "first", "second", "third", "both", "many", "some",
+    "one", "two", "three", "first", "second", "third", "last", "both", "many", "some",
     "most", "other", "another", "such", "same", "new", "old", "main", "major",
   ].map((w) => w.toLowerCase()),
 );
@@ -79,6 +91,7 @@ function isGoodTerm(term: string): boolean {
   if (t.length < 3 || t.length > 60) return false;
   const words = t.split(/\s+/);
   if (words.length > 6) return false;
+  if (/^(?:note|remember|recall|notice|we|there|here|these|those|this|it|its|they|their|our|your|his|her|again|similarly|if|for|when|because|while|although|unless|since|after|before|whereas|whether|such|thus|hence)\b/i.test(t)) return false;
   // Reject pure stop-words or very generic single words
   if (words.length === 1 && STOP_TERMS.has(t.toLowerCase())) return false;
   if (words.every((w) => STOP_TERMS.has(w.toLowerCase()))) return false;
@@ -87,12 +100,101 @@ function isGoodTerm(term: string): boolean {
 
 type DraftCard = { front: string; back: string; score: number };
 
+function extractNomenclatureRuleCards(material: string): DraftCard[] {
+  const lines = material.replace(/\r/g, "").split("\n");
+  const cards: DraftCard[] = [];
+  let collecting = false;
+  let current: { number: number; text: string } | null = null;
+
+  const saveCurrent = () => {
+    if (!current) return;
+    const text = current.text.replace(/\s+/g, " ").trim();
+    if (text.length >= 25) {
+      cards.push({
+        front: `What is rule ${current.number} of systematic nomenclature?`,
+        back: text.slice(0, 700),
+        score: 110,
+      });
+    }
+    current = null;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\s+/g, " ").trim();
+    if (/^rules? of systematic nomenclature$/i.test(line)) {
+      saveCurrent();
+      collecting = true;
+      continue;
+    }
+    if (!collecting || !line) continue;
+    if (/^\.*\s*(?:examples?|solutions?|draw|chapter|section)\b/i.test(line)) {
+      saveCurrent();
+      collecting = false;
+      continue;
+    }
+    if (/^\d{1,3}$/.test(line)) continue; // PDF page number
+
+    const numberedRule = /^(\d{1,2})[.)]\s+(.+)$/.exec(line);
+    if (numberedRule) {
+      const number = Number(numberedRule[1]);
+      if (number < 1 || number > 8) continue;
+      saveCurrent();
+      current = { number, text: numberedRule[2] };
+      continue;
+    }
+    if (current) current.text += ` ${line}`;
+  }
+  saveCurrent();
+  return cards.length >= 2 ? cards : [];
+}
+
 /**
  * Turn a fact sentence into a proper study Q→A pair.
  */
 function sentenceToCard(sentence: string): DraftCard | null {
   const s = sentence.trim().replace(/\s+/g, " ");
   if (!s) return null;
+  // A question copied from notes is a prompt, not an answer to turn into a card.
+  if (/^(?:what|why|how|who|where|when|which)\b.*\?$/i.test(s)) return null;
+
+  const ongoingChange = s.match(/^(?:(the)\s+)?(.+?)\s+(?:is|are)\s+(?:also\s+)?(?:accumulating|increasing|decreasing|rising|falling|declining|growing|shrinking|moving|changing)\b/i);
+  if (ongoingChange && isGoodTerm(ongoingChange[2])) {
+    return {
+      front: `What is happening to ${ongoingChange[1] ? "the " : ""}${ongoingChange[2]}?`,
+      back: s.slice(0, 700),
+      score: 88,
+    };
+  }
+
+  const foundIn = s.match(/^(?:(the|a|an)\s+)?(.+?)\s+(is|are)\s+found\b/i);
+  if (foundIn && isGoodTerm(foundIn[2])) {
+    const subject = foundIn[2].replace(/^D\s+enantiomeric\b/i, "D-enantiomeric");
+    return {
+      front: `Where ${foundIn[3].toLowerCase()} ${foundIn[1] ? `${foundIn[1].toLowerCase()} ` : ""}${subject} found?`,
+      back: s.slice(0, 700),
+      score: 90,
+    };
+  }
+
+  const madeWhen = s.match(/^(?:(the|a|an)\s+)?(.+?)\s+is made when\b/i);
+  if (madeWhen && isGoodTerm(madeWhen[2])) {
+    const subject = madeWhen[2].replace(/^D\s+enantiomer\b/i, "D-enantiomer");
+    return {
+      front: `When is ${madeWhen[1] ? `${madeWhen[1].toLowerCase()} ` : ""}${subject} made?`,
+      back: s.slice(0, 700),
+      score: 90,
+    };
+  }
+
+  const hypothesizedFunction = s.match(/^(?:(the)\s+)?(.+?)\s+(is|are)\s+thought to\s+(?:create|cause|provide|form|enable|help|allow)\b/i);
+  if (hypothesizedFunction && isGoodTerm(hypothesizedFunction[2])) {
+    const article = hypothesizedFunction[1] ? "the " : "";
+    return {
+      front: `What ${hypothesizedFunction[3].toLowerCase()} ${article}${hypothesizedFunction[2]} thought to do?`,
+      back: s.slice(0, 700),
+      score: 90,
+    };
+  }
 
   // --- Pattern 1: "X is/was/were/are/refers to …"
   // Capture multi-word proper-ish subjects, not bare "The wars were…"
@@ -104,7 +206,11 @@ function sentenceToCard(sentence: string): DraftCard | null {
     const term = defMatch[2].trim().replace(/\s+/g, " ");
     const verb = defMatch[3].toLowerCase();
     const rest = defMatch[4].trim();
-    if (isGoodTerm(term) && rest.length >= 20) {
+    const weakPredicate = /^(?:(?:much|very|far|slightly|significantly|somewhat)\s+)?(?:more|less|too|quite|rather|small|large|high|low|frequent|complicated|resistant|important|rare|complex)\b|^all\s+too\s+\w+/i;
+    const isCopula = ["is", "are", "was", "were"].includes(verb);
+    const isOriginalName = verb === "was" && /^originally called\b/i.test(rest);
+    const hasClearQuestionForm = !["was", "were"].includes(verb) || isOriginalName;
+    if (isGoodTerm(term) && rest.length >= 20 && hasClearQuestionForm && !(isCopula && weakPredicate.test(rest))) {
       const termForQuestion =
         article || term.includes("-") || /[A-Z]/.test(term.slice(1))
           ? term
@@ -117,8 +223,15 @@ function sentenceToCard(sentence: string): DraftCard | null {
         front = `What ${verb} ${article === "the" ? "the " : ""}${termForQuestion}?`;
       } else if (verb === "refers to" || verb === "means" || verb === "describes") {
         front = verb === "refers to" ? `What does ${termForQuestion} refer to?` : `What does ${termForQuestion} mean?`;
+      } else if (verb === "was" && /^originally called\b/i.test(rest)) {
+        front = `What was the original name of the ${termForQuestion}?`;
       } else {
-        const questionArticle = article ? `${article} ` : "";
+        const needsDefiniteArticle = /^(?:geometry|bond angle|study|process|function|structure|relationship|effect|cause)\b/i.test(term);
+        const questionArticle = article
+          ? `${article} `
+          : verb === "is" && needsDefiniteArticle
+            ? "the "
+            : "";
         front = `What ${verb === "was" ? "was" : "is"} ${questionArticle}${termForQuestion}?`;
       }
       return { front, back: s.slice(0, 700), score: 95 };
@@ -313,7 +426,7 @@ export async function generateCardsFromMaterial(input: {
     );
   }
 
-  const drafts: DraftCard[] = [];
+  const drafts: DraftCard[] = extractNomenclatureRuleCards(input.material);
   const usedBacks = new Set<string>();
   const usedFronts = new Set<string>();
 
@@ -355,18 +468,6 @@ export async function generateCardsFromMaterial(input: {
     front: card.front.slice(0, 220),
     back: card.back.slice(0, 800),
   }));
-}
-
-export async function extractCard(reply: string) {
-  const cleaned = reply.replace(/\*\*/g, "").trim();
-  const lines = cleaned.split(/\n+/).map(cleanSentence).filter(Boolean);
-  const answer =
-    lines.filter((line) => !line.endsWith("?")).join(" ").slice(0, 800) || cleaned.slice(0, 800);
-  const question =
-    lines.find((line) => line.endsWith("?")) ||
-    `Explain the main idea: ${lines[0]?.slice(0, 100) ?? "this topic"}?`;
-  if (!answer || !question) throw new Error("Could not make a card from that reply.");
-  return { front: question.slice(0, 300), back: answer };
 }
 
 export async function generateStudyPlan(input: {

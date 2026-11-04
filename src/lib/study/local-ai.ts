@@ -21,7 +21,7 @@ function asksForChineseTranslation(question: string) {
   return /\bin\s+chinese\b|\bchinese\s+translation\b|\btranslate\b.{0,50}\b(chinese|mandarin)\b|\bhow\s+to\s+say\b.{0,50}\b(chinese|mandarin)\b|中文|汉字|翻译/i.test(question);
 }
 
-function hasUnexpectedChinese(question: string, reply: string) {
+export function hasUnexpectedChinese(question: string, reply: string) {
   if (tutorLanguage(question) === "Chinese" || asksForChineseTranslation(question)) return false;
   const askedCharacters = new Set([...question].filter((character) => HAN_CHARACTER.test(character)));
   return [...reply].some((character) => HAN_CHARACTER.test(character) && !askedCharacters.has(character));

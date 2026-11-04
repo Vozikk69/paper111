@@ -6,6 +6,7 @@ import {
   chunkText,
   eachDay,
   isDay,
+  isTutorReplySaveable,
   retrieveRelevantChunks,
   type ChatMessage,
   type Flashcard,
@@ -605,15 +606,14 @@ function cardFromReplyText(content: string, userQuestion?: string): { front: str
 
   // Refuse to turn "I don't know / not in notes" replies into study cards.
   const lower = cleaned.toLowerCase();
-  if (
+  if (!isTutorReplySaveable(cleaned) ||
     lower.includes("don't see that in your notes") ||
     lower.includes("do not see that in your notes") ||
     lower.includes("not in your notes") ||
     lower.includes("upload more material") ||
     lower.includes("i don't know") ||
     lower.startsWith("i cannot") ||
-    lower.startsWith("i can't")
-  ) {
+    lower.startsWith("i can't")) {
     throw new Error(
       "That reply does not contain a solid fact from your notes. Ask the tutor about something that is in the notes, or generate cards from notes instead.",
     );
@@ -627,10 +627,22 @@ function cardFromReplyText(content: string, userQuestion?: string): { front: str
 
   // Prefer a short check-question already in the reply as the front.
   const candidateQuestion = (userQuestion ?? "").trim().replace(/\s+/g, " ");
-  let front =
-    candidateQuestion.endsWith("?") && candidateQuestion.length >= 12 && candidateQuestion.length <= 220
-      ? candidateQuestion
-      : "";
+  let front = "";
+  if (candidateQuestion.length >= 12 && candidateQuestion.length <= 220) {
+    if (candidateQuestion.endsWith("?")) {
+      front = candidateQuestion;
+    } else if (/^naming\s+of\s+alkanes?$/i.test(candidateQuestion)) {
+      front = "How are alkanes named?";
+    } else if (/^rules?\s+of\s+(?:systematic\s+)?nomenclature$/i.test(candidateQuestion)) {
+      front = "What are the rules of systematic nomenclature?";
+    } else if (/^rules?\s+(?:for|to)\s+.+/i.test(candidateQuestion)) {
+      front = `What are the ${candidateQuestion[0].toLowerCase()}${candidateQuestion.slice(1)}?`;
+    } else if (/^(?:what|how|why|when|where|which|who|is|are|does|do|can|should|explain|define|list|compare|describe)\b/i.test(candidateQuestion)) {
+      front = `${candidateQuestion.replace(/[.!?]+$/, "")}?`;
+    } else {
+      front = `What does the chapter say about ${candidateQuestion[0].toLowerCase()}${candidateQuestion.slice(1)}?`;
+    }
+  }
   let backBody = cleaned;
   const qIdx = front
     ? undefined
