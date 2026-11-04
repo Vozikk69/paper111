@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Lumen">
+  <rect width="32" height="32" rx="7" fill="#101416"/>
+  <path d="M5 9h22l-4 10H9z" fill="#e2a23a"/>
+  <path d="M8.4 11.2h15.2L21.2 16.4H10.8z" fill="#f3eadc"/>
+  <circle cx="16" cy="14.1" r="2.15" fill="#e48972"/>
+  <rect x="14" y="19" width="4" height="5.8" rx="1.6" fill="#e2a23a"/>
+  <rect x="7.5" y="24.6" width="17" height="3.6" rx="1.7" fill="#8fceb0"/>
+</svg>
