@@ -441,12 +441,13 @@ export const sendTutorMessage = createServerFn({ method: "POST" })
       where user_id = ${userId} and subject_id = ${data.subjectId}
       order by created_at desc limit 10
     `;
-    const chunks = await sql<{ source: string; content: string }>`
-      select source, content from note_chunks where user_id = ${userId} and subject_id = ${data.subjectId}
+    const chunks = await sql<{ note_id: string; position: number; source: string; content: string }>`
+      select note_id, position, source, content from note_chunks where user_id = ${userId} and subject_id = ${data.subjectId}
     `;
-    const contextChunks = retrieveRelevantChunks(data.content, chunks.map((chunk) => ({ source: chunk.source, text: chunk.content }))).map(
-      (chunk) => ({ source: chunk.source, text: chunk.text.slice(0, 1200) }),
-    );
+    const contextChunks = retrieveRelevantChunks(
+      data.content,
+      chunks.map((chunk) => ({ noteId: chunk.note_id, position: Number(chunk.position), source: chunk.source, text: chunk.content })),
+    ).map(({ source, text, noteId, position }) => ({ source, text, noteId, position }));
     const { tutorReply } = await import("@/lib/study/ai.server");
     const reply = await tutorReply({
       subjectTitle: subject.title,
@@ -525,13 +526,13 @@ export const prepareTutorContext = createServerFn({ method: "POST" })
       where user_id = ${userId} and subject_id = ${data.subjectId}
       order by created_at desc limit 10
     `;
-    const chunks = await sql<{ source: string; content: string }>`
-      select source, content from note_chunks where user_id = ${userId} and subject_id = ${data.subjectId}
+    const chunks = await sql<{ note_id: string; position: number; source: string; content: string }>`
+      select note_id, position, source, content from note_chunks where user_id = ${userId} and subject_id = ${data.subjectId}
     `;
     const contextChunks = retrieveRelevantChunks(
       data.content,
-      chunks.map((chunk) => ({ source: chunk.source, text: chunk.content })),
-    ).map((chunk) => ({ source: chunk.source, text: chunk.text.slice(0, 1200) }));
+      chunks.map((chunk) => ({ noteId: chunk.note_id, position: Number(chunk.position), source: chunk.source, text: chunk.content })),
+    ).map(({ source, text, noteId, position }) => ({ source, text, noteId, position }));
     return {
       subjectTitle: subject.title,
       description: subject.description ?? "",

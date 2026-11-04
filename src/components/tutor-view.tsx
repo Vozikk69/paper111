@@ -13,7 +13,6 @@ import {
 } from "@/lib/study/server";
 import { errText, useDesk, useRefreshDesk } from "@/lib/study/use-desk";
 import {
-  isLocalAiReady,
   loadLocalTutor,
   localTutorReply,
 } from "@/lib/study/local-ai";
@@ -101,13 +100,8 @@ export function TutorView() {
   }
 
   async function send() {
-    if (modelStatus === "ready" || isLocalAiReady()) {
-      await sendLocal();
-    } else if (modelStatus === "loading") {
-      toast.message("Still downloading the local model… try again in a moment.");
-    } else {
-      toast.message("The local model is not ready yet. Check the model status above.");
-    }
+    // Source-only answers and no-notes replies do not need the model to finish loading.
+    await sendLocal();
   }
 
   return (

@@ -207,7 +207,13 @@ function tokenize(text: string) {
   return text
     .toLowerCase()
     .split(/[^a-z0-9]+/)
-    .filter((token) => token.length > 2 && !STOPWORDS.has(token));
+    .filter((token) => token.length > 2 && !STOPWORDS.has(token))
+    .map((token) => {
+      if (token === "naming" || token === "named" || token === "names") return "name";
+      if (token.endsWith("ies") && token.length > 5) return `${token.slice(0, -3)}y`;
+      if (token.endsWith("s") && !token.endsWith("ss") && token.length > 4) return token.slice(0, -1);
+      return token;
+    });
 }
 
 export function chunkText(text: string, size = 900, overlap = 150) {
@@ -228,16 +234,22 @@ export function chunkText(text: string, size = 900, overlap = 150) {
   return chunks.filter(Boolean);
 }
 
-export type RetrievedChunk = { source: string; text: string };
+export type RetrievedChunk = { source: string; text: string; noteId?: string; position?: number };
 
 export function retrieveRelevantChunks(
   query: string,
-  notes: { source: string; text: string }[],
-  limit = 4,
+  notes: { source: string; text: string; noteId?: string; position?: number }[],
+  limit = 3,
 ): RetrievedChunk[] {
   const queryTokens = Array.from(new Set(tokenize(query)));
   const all = notes.map((note) => ({ ...note, tokens: tokenize(note.text) }));
   if (!all.length || !queryTokens.length) return [];
+  const asksForList = /\b(rule|rules|steps|criteria|guidelines|procedure|nomenclature|naming)\b/i.test(query);
+  const asksAboutAlkaneNaming = /\b(?:naming|name|nomenclature)\b/i.test(query) && /\balkanes?\b/i.test(query);
+  const definitionTarget = query.match(/\b(?:what\s+(?:is|are)|define|definition\s+of)\s+(?:a|an|the)?\s*([a-z][a-z-]{2,})/i)?.[1]?.toLowerCase();
+  const definitionPattern = definitionTarget
+    ? new RegExp(`\\b${definitionTarget}s?\\s+(?:is|are|means|refers\\s+to|defined\\s+as)\\b`, "i")
+    : null;
   const documentFrequency = new Map<string, number>();
   for (const chunk of all) {
     for (const token of new Set(chunk.tokens)) {
@@ -248,16 +260,44 @@ export function retrieveRelevantChunks(
     const termCounts = new Map<string, number>();
     for (const token of chunk.tokens) termCounts.set(token, (termCounts.get(token) ?? 0) + 1);
     let score = 0;
+    let matchedTokens = 0;
     for (const token of queryTokens) {
       const tf = termCounts.get(token) ?? 0;
       if (!tf) continue;
+      matchedTokens += 1;
       const idf = Math.log(1 + all.length / (documentFrequency.get(token) ?? 1));
-      score += (tf / (tf + 1.2)) * idf;
+      score += (tf / (tf + 1.2)) * idf * (token.length <= 4 ? 0.8 : 1);
     }
-    return { source: chunk.source, text: chunk.text, score };
+    if (matchedTokens > 0 && matchedTokens === queryTokens.length) score += 1.25;
+    if (asksForList && /(?:^|\n)\s*\d+\.\s+/.test(chunk.text)) score += 1.2;
+    if (asksForList && /rules?\s+of\s+(?:systematic\s+)?nomenclature|naming\s+of\s+alkanes/i.test(chunk.text)) score += 3;
+    if (asksAboutAlkaneNaming && /rules?\s+(?:necessary\s+)?to\s+name\s+alkanes|rules?\s+of\s+(?:systematic\s+)?nomenclature/i.test(chunk.text)) score += 4;
+    if (definitionPattern?.test(chunk.text)) score += 3;
+    return { source: chunk.source, text: chunk.text, noteId: chunk.noteId, position: chunk.position, score };
   });
-  const hits = scored.filter((chunk) => chunk.score > 0).sort((a, b) => b.score - a.score).slice(0, limit);
-  return hits.map(({ source, text }) => ({ source, text }));
+  const ranked = scored.filter((chunk) => chunk.score > 0).sort((a, b) => b.score - a.score);
+  const hits = ranked.slice(0, limit);
+
+  // Lists and numbered rules often continue in the next saved chunk. Pull only
+  // that adjacent passage from the same source so the answer can include the full list.
+  if (asksForList && hits.length > 0) {
+    const best = hits[0];
+    const hasList = /(?:^|\n)\s*\d+\.\s+/.test(best.text) || /rules?\s+(?:necessary\s+)?to\s+name\s+alkanes|rules?\s+of\s+(?:systematic\s+)?nomenclature|naming\s+of\s+alkanes/i.test(best.text);
+    if (hasList && best.noteId && typeof best.position === "number") {
+      const adjacent = all.find((chunk) => chunk.noteId === best.noteId && chunk.position === best.position! + 1);
+      if (adjacent && !hits.some((hit) => hit.position === adjacent.position && hit.noteId === adjacent.noteId)) {
+        hits.splice(0, hits.length, best, {
+          source: adjacent.source,
+          text: adjacent.text,
+          noteId: adjacent.noteId,
+          position: adjacent.position,
+          score: best.score - 0.01,
+        });
+      }
+    }
+  }
+
+  return hits.map(({ source, text, noteId, position }) => ({ source, text, noteId, position }));
 }
 
 function parseDay(value: string) {

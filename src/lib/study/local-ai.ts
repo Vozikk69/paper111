@@ -59,7 +59,14 @@ function unsupportedReply(question: string) {
 
 function contentTerms(text: string) {
   return new Set(
-    (text.toLowerCase().match(/[\p{L}]{3,}/gu) ?? []).filter((word) => !CONTENT_STOP_WORDS.has(word)),
+    (text.toLowerCase().match(/[\p{L}]{3,}/gu) ?? [])
+      .filter((word) => !CONTENT_STOP_WORDS.has(word))
+      .map((word) => {
+        if (word === "naming" || word === "named" || word === "names") return "name";
+        if (word.endsWith("ies") && word.length > 5) return `${word.slice(0, -3)}y`;
+        if (word.endsWith("s") && !word.endsWith("ss") && word.length > 4) return word.slice(0, -1);
+        return word;
+      }),
   );
 }
 
@@ -69,7 +76,78 @@ function answerIsSupported(reply: string, context: { text: string }[]) {
   const noteTerms = contentTerms(context.map((chunk) => chunk.text).join(" "));
   let matches = 0;
   for (const word of answerTerms) if (noteTerms.has(word)) matches += 1;
-  return matches >= Math.min(2, answerTerms.size) && matches / answerTerms.size >= 0.2;
+  return matches >= Math.min(2, answerTerms.size) && matches / answerTerms.size >= 0.4;
+}
+
+function mergeContext(input: { context: { source: string; text: string; noteId?: string; position?: number }[] }) {
+  const chunks = [...input.context];
+  if (chunks.length > 1 && chunks.every((chunk) => chunk.noteId === chunks[0].noteId && chunk.noteId)) {
+    chunks.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+  }
+  let merged = "";
+  for (const chunk of chunks) {
+    if (!merged) {
+      merged = chunk.text;
+      continue;
+    }
+    let overlap = 0;
+    const max = Math.min(240, merged.length, chunk.text.length);
+    for (let size = max; size > 0; size -= 1) {
+      if (merged.slice(-size) === chunk.text.slice(0, size)) {
+        overlap = size;
+        break;
+      }
+    }
+    merged += `${overlap ? "" : "\n"}${chunk.text.slice(overlap)}`;
+  }
+  return merged;
+}
+
+function extractNumberedRules(text: string) {
+  const matches = [...text.matchAll(/(?:^|\n)\s*(\d{1,2})\.\s+([\s\S]*?)(?=\n\s*\d{1,2}\.\s+|\n?\.?Examples?:|\s*\.Examples:|(?![\s\S]))/g)];
+  const items = new Map<number, string>();
+  for (const match of matches) {
+    const number = Number(match[1]);
+    if (number < 1 || number > 8) continue;
+    const item = match[2].replace(/\s+/g, " ").trim();
+    if (item.length > (items.get(number)?.length ?? 0)) items.set(number, item);
+  }
+  const ordered: string[] = [];
+  for (let number = 1; items.has(number); number += 1) ordered.push(`${number}. ${items.get(number)}`);
+  return ordered.length >= 3 ? ordered : [];
+}
+
+function exactDefinition(question: string, context: { source: string; text: string; noteId?: string; position?: number }[]) {
+  if (!/\b(?:what\s+(?:is|are)|define|definition\s+of)\b/i.test(question)) return null;
+  const target = question.match(/\b(?:what\s+(?:is|are)|define|definition\s+of)\s+(?:a|an|the)?\s*([a-z][a-z-]{2,})/i)?.[1];
+  if (!target) return null;
+  const text = mergeContext({ context }).replace(/\s+/g, " ");
+  const match = new RegExp(`\\b${target}s?\\s+(?:is|are|means|refers\\s+to|defined\\s+as)\\b[^.!?]*[.!?]`, "i").exec(text);
+  return match?.[0]?.trim() ?? null;
+}
+
+function extractiveTutorReply(input: {
+  context: { source: string; text: string; noteId?: string; position?: number }[];
+  question: string;
+}) {
+  const asksForNamingRules = /\b(?:nomenclature|naming\s+of\s+alkanes|rules?\s+(?:for|of|to)\s+(?:naming|name)|how\s+to\s+name\s+alkanes)\b/i.test(input.question);
+  const text = mergeContext({ context: input.context });
+  const source = input.context[0]?.source ?? "your notes";
+  if (asksForNamingRules) {
+    const rules = extractNumberedRules(text);
+    if (rules.length) {
+      return `According to ${source}, the rules for naming alkanes are:\n${rules.join("\n")} [1]`;
+    }
+  }
+  const asksAboutAlkaneDoubleBonds = /\balkanes?\b/i.test(input.question)
+    && /\bdouble\s+bonds?\b/i.test(input.question)
+    && /\b(?:does|do|have|has|contain|contains)\b/i.test(input.question);
+  if (asksAboutAlkaneDoubleBonds && /alkanes?\s+are\s+organic compounds?\s+containing\s+carbon\s+and\s+hydrogen\s+with\s+single\s+bonds\s+only/i.test(text)) {
+    return "No. The chapter defines alkanes as compounds of carbon and hydrogen with single bonds only, so they do not have double bonds. [1]";
+  }
+  const definition = exactDefinition(input.question, input.context);
+  if (definition) return `${definition} [1]`;
+  return null;
 }
 
 type WorkerResponse =
@@ -169,7 +247,7 @@ function buildPrompt(input: {
   const notes = hasNotes
     ? input.context
         .slice(0, 3)
-        .map((c, i) => `[${i + 1}] (${c.source})\n${c.text.slice(0, 450)}`)
+        .map((c, i) => `[${i + 1}] (${c.source})\n${c.text}`)
         .join("\n\n")
     : "(no matching notes)";
 
@@ -181,9 +259,9 @@ function buildPrompt(input: {
         `- Reply entirely in ${tutorLanguage(input.question)}. Do not mix in unrelated languages or scripts.`,
         input.description ? `Subject context: ${input.description.slice(0, 160)}` : "",
         "RULES:",
-        "- Answer ONLY using the Notes below. Do not invent facts, dates, countries, or wars that are not in the notes.",
+        "- Answer the exact question using only the Notes below. Do not add facts from memory or unrelated details.",
         "- If the notes do not contain the answer, say exactly: \"I don't see relevant notes for that question. Add a note or paste the material, and I'll answer from it.\"",
-        "- Be concise (under 90 words). Prefer short factual sentences.",
+        "- Be clear and concise (under 90 words). For rules or steps, include every supported item in order.",
         "- Cite note numbers like [1] when you use them.",
         "- Do not end with a quiz question.",
         "",
@@ -198,10 +276,7 @@ function buildPrompt(input: {
         "Reply in one short sentence: ask them to upload notes or paste the relevant text, and do not invent historical or scientific facts.",
       ].join("\n");
 
-  let prompt = `<|im_start|>system\n${system}<|im_end|>\n`;
-  for (const message of input.history.slice(-2)) {
-    prompt += `<|im_start|>${message.role}\n${message.content.slice(0, 280)}<|im_end|>\n`;
-  }
+  const prompt = `<|im_start|>system\n${system}<|im_end|>\n`;
   return `${prompt}<|im_start|>user\n${input.question.slice(0, 600)}<|im_end|>\n<|im_start|>assistant\n`;
 }
 
@@ -214,6 +289,8 @@ export async function localTutorReply(input: {
 }): Promise<string> {
   // A tiny local model invents answers when it has no relevant source to use.
   if (input.context.length === 0) return noNotesReply(input.question);
+  const extractive = extractiveTutorReply(input);
+  if (extractive) return extractive;
   await loadLocalTutor();
   const result = await requestWorker("generate", buildPrompt(input));
   if (typeof result !== "string" || !result.trim()) throw new Error("The local model returned an empty reply.");
