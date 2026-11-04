@@ -237,8 +237,7 @@ export function retrieveRelevantChunks(
 ): RetrievedChunk[] {
   const queryTokens = Array.from(new Set(tokenize(query)));
   const all = notes.map((note) => ({ ...note, tokens: tokenize(note.text) }));
-  if (!all.length) return [];
-  if (!queryTokens.length) return all.slice(0, limit).map(({ source, text }) => ({ source, text }));
+  if (!all.length || !queryTokens.length) return [];
   const documentFrequency = new Map<string, number>();
   for (const chunk of all) {
     for (const token of new Set(chunk.tokens)) {
@@ -257,9 +256,8 @@ export function retrieveRelevantChunks(
     }
     return { source: chunk.source, text: chunk.text, score };
   });
-  const hits = scored.filter((chunk) => chunk.score > 0).sort((a, b) => b.score - a.score);
-  const chosen = (hits.length ? hits : scored).slice(0, limit);
-  return chosen.map(({ source, text }) => ({ source, text }));
+  const hits = scored.filter((chunk) => chunk.score > 0).sort((a, b) => b.score - a.score).slice(0, limit);
+  return hits.map(({ source, text }) => ({ source, text }));
 }
 
 function parseDay(value: string) {

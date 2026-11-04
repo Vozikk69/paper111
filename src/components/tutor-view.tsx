@@ -175,7 +175,7 @@ export function TutorView() {
       ) : noteCount === 0 && messages.length === 0 ? (
         <Panel className="p-6 text-center">
           <p className="text-mute">
-            Upload notes for this subject so the tutor can use them. You can still ask general questions.
+            Add notes for this subject so the tutor can answer from your material. Without a relevant note, it will ask you to provide context.
           </p>
         </Panel>
       ) : null}
